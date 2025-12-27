@@ -26,4 +26,4 @@ echo "Start job with: 'VDL' for help run: 'VDL -h'" >> /tmp/vdl-installed
 clear
 cat /tmp/vdl-installed | borderize -FF00FF && rm /tmp/vdl-installed
 sleep 6
-VDL
+bash /usr/local/bin/VDL
