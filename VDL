@@ -1,0 +1,470 @@
+#!/bin/bash
+# VDL - Any Video Downloader with clean UI
+
+TMPDIR="/tmp/videofetch"
+PROGRESS_FILE="$TMPDIR/progress.txt"
+PID_FILE="$TMPDIR/worker.pid"
+mkdir -p "$TMPDIR"
+
+# Colors (exact hex values)
+C_TITLE="FF00D8"
+C_COMPLETED="00FF0B"
+C_FAILED="FF0000"
+C_VIDEO="FFD400"
+C_MAIN="00FFEA"
+C_WHITE="FFFFFF"
+C_YELLOW="FFD700"
+C_ORANGE="FFA500"
+C_HINT="888888"
+
+# Nerdfont icons
+ICON_VIDEO=""       # f1c8
+ICON_DOWNLOAD=" "   # f0ab
+ICON_FOLDER=" "     # f114
+ICON_INTERNET=" "   # f0ac
+ICON_TRAFFIC=" "    # f1c1
+
+# ============ HELP ============
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    echo "VDL - Any Video Downloader" | borderize -$C_TITLE -$C_WHITE
+    echo ""
+    echo -e "Usage: VDL [OPTIONS]\n\nOptions:\n  (no args)     Start interactive download\n  --monitor -m  View progress of background job\n  --stop    -s  Kill running background job\n  --help    -h  Show this help message" | borderize -$C_MAIN
+    exit 0
+fi
+
+# ============ STOP ============
+if [[ "$1" == "--stop" || "$1" == "-s" ]]; then
+    if [[ -f "$PID_FILE" ]]; then
+        WORKER_PID=$(cat "$PID_FILE")
+        if kill -0 "$WORKER_PID" 2>/dev/null; then
+            kill "$WORKER_PID" 2>/dev/null
+            rm -f "$PROGRESS_FILE.running" "$PID_FILE"
+            echo "VDL job stopped (PID: $WORKER_PID)" | borderize -$C_COMPLETED
+        else
+            rm -f "$PID_FILE"
+            echo "No active VDL job found" | borderize -$C_FAILED
+        fi
+    else
+        echo "No active VDL job found" | borderize -$C_FAILED
+    fi
+    exit 0
+fi
+
+# ============ MONITOR MODE ============
+if [[ "$1" == "--monitor" || "$1" == "-m" ]]; then
+    if [[ ! -f "$PROGRESS_FILE.running" ]]; then
+        echo "No active VDL job found" | borderize -$C_FAILED
+        exit 1
+    fi
+    
+    tput civis
+    clear
+    
+    while [[ -f "$PROGRESS_FILE.running" ]]; do
+        tput cup 0 0
+        
+        CURRENT=$(cat "$TMPDIR/current_num.txt" 2>/dev/null || echo "0")
+        CURRENT_URL=$(cat "$TMPDIR/current_url.txt" 2>/dev/null || echo "")
+        PROGRESS=$(tail -1 "$PROGRESS_FILE" 2>/dev/null || echo "Starting...")
+        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
+        FAILED=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
+        TOTAL=$(cat "$TMPDIR/total.txt" 2>/dev/null || echo "1")
+        SAVE_DIR=$(cat "$TMPDIR/save_dir.txt" 2>/dev/null || echo ".")
+        SOURCE=$(cat "$TMPDIR/source.txt" 2>/dev/null || echo "URL")
+        
+        [[ ${#CURRENT_URL} -gt 70 ]] && CURRENT_URL="${CURRENT_URL:0:67}..."
+        [[ ${#SAVE_DIR} -gt 62 ]] && SAVE_DISP="${SAVE_DIR:0:59}..." || SAVE_DISP="$SAVE_DIR"
+        [[ ${#SOURCE} -gt 40 ]] && SOURCE_DISP="${SOURCE:0:37}..." || SOURCE_DISP="$SOURCE"
+        
+        PROGRESS_CLEAN=$(echo "$PROGRESS" | sed 's/\[download\]/[Progress]/' | head -c 70)
+        
+        LINE1=$(printf "$ICON_FOLDER Saving to: %-62s" "$SAVE_DISP")
+        LINE2=$(printf "$ICON_DOWNLOAD Downloading: %s/%s from: %-41s" "$CURRENT" "$TOTAL" "$SOURCE_DISP")
+        LINE3=$(printf "$ICON_INTERNET %-71s" "$CURRENT_URL")
+        LINE4=$(printf "$ICON_TRAFFIC %-71s" "$PROGRESS_CLEAN")
+        
+        TITLE_BOX=$(echo "VDL - Download Progress" | borderize -$C_TITLE -$C_WHITE)
+        COMP_BOX=$(echo "✓ Completed: $COMPLETED" | borderize -$C_COMPLETED)
+        FAIL_BOX=$(echo "✗ Failed: $FAILED" | borderize -$C_FAILED)
+        VID_BOX=$(echo "$ICON_VIDEO Video: $CURRENT/$TOTAL" | borderize -$C_VIDEO)
+        paste <(echo "$TITLE_BOX") <(echo "$COMP_BOX") <(echo "$FAIL_BOX") <(echo "$VID_BOX") | tr '\t' ' '
+        
+        echo -e "$LINE1\n$LINE2\n$LINE3\n$LINE4" | borderize -$C_MAIN
+        
+        echo "Press Ctrl+C to close monitor (download continues in background)" | borderize -$C_HINT
+        
+        tput el
+        tput el
+        
+        sleep 0.3
+    done
+    
+    tput cnorm
+    clear
+    echo "Job completed!" | borderize -$C_COMPLETED
+    
+    # Show summary
+    COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
+    FAILED=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
+    echo "✓ Completed: $COMPLETED" | borderize -$C_COMPLETED
+    echo "✗ Failed: $FAILED" | borderize -$C_FAILED
+    
+    exit 0
+fi
+
+# ============ WORKER MODE (runs in background) ============
+if [[ "$1" == "--worker" ]]; then
+    shift
+    INPUT="$1"
+    DIR="$2"
+    FMT="$3"
+    NAME="$4"
+    IS_SINGLE="$5"
+    
+    # Save PID
+    echo $$ > "$PID_FILE"
+    
+    # Download function
+    download_url() {
+        local URL="$1"
+        local DIR="$2"
+        local NAME="$3"
+        local FMT="$4"
+        
+        [[ -z "$URL" ]] && return 1
+        
+        if [[ -n "$NAME" ]]; then
+            OUT="-o ${DIR}/${NAME}.%(ext)s"
+        else
+            OUT="-o ${DIR}/%(title)s.%(ext)s"
+        fi
+        
+        yt-dlp $FMT $OUT --no-playlist --newline --progress "$URL" 2>&1 | while IFS= read -r line; do
+            echo "$line" >> "$TMPDIR/full_log.txt"
+            if [[ "$line" =~ \[download\] || "$line" =~ ETA || "$line" =~ % ]]; then
+                echo "$line" > "$PROGRESS_FILE"
+            elif [[ "$line" =~ Downloading || "$line" =~ Merging || "$line" =~ Extracting ]]; then
+                echo "$line" > "$PROGRESS_FILE"
+            fi
+        done
+        
+        if grep -q "has already been downloaded\|Merging formats\|100%\|Destination:" "$TMPDIR/full_log.txt" 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    }
+    
+    if [[ -f "$INPUT" ]]; then
+        # Batch mode
+        CURRENT=0
+        COMPLETED=0
+        FAILED_COUNT=0
+        
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            
+            URL=$(echo "$line" | grep -oE 'https?://[^\s]+' | head -1)
+            [[ -z "$URL" ]] && continue
+            
+            ((CURRENT++))
+            echo "$CURRENT" > "$TMPDIR/current_num.txt"
+            echo "$URL" > "$TMPDIR/current_url.txt"
+            echo "Starting..." > "$PROGRESS_FILE"
+            > "$TMPDIR/full_log.txt"
+            
+            if download_url "$URL" "$DIR" "" "$FMT"; then
+                ((COMPLETED++))
+            else
+                ((FAILED_COUNT++))
+                echo "$URL" >> "$TMPDIR/failed_urls.txt"
+            fi
+            
+            echo "$COMPLETED" > "$TMPDIR/completed.txt"
+            echo "$FAILED_COUNT" > "$TMPDIR/failed.txt"
+            
+        done < "$INPUT"
+    else
+        # Single URL
+        echo "$INPUT" > "$TMPDIR/current_url.txt"
+        > "$TMPDIR/full_log.txt"
+        
+        if download_url "$INPUT" "$DIR" "$NAME" "$FMT"; then
+            echo "1" > "$TMPDIR/completed.txt"
+        else
+            echo "1" > "$TMPDIR/failed.txt"
+        fi
+    fi
+    
+    rm -f "$PROGRESS_FILE.running" "$PID_FILE"
+    exit 0
+fi
+
+# ============ MAIN INTERACTIVE MODE ============
+
+# Auto-install yt-dlp from GitHub (latest version)
+if ! command -v yt-dlp &>/dev/null; then
+    echo "Installing yt-dlp (latest)..."
+    sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+    sudo chmod +x /usr/local/bin/yt-dlp
+    echo "yt-dlp installed: $(yt-dlp --version)"
+fi
+
+# Auto-install borderize
+if ! command -v borderize &>/dev/null; then
+    echo "Installing borderize..."
+    sudo curl -sL https://raw.githubusercontent.com/GlitchLinux/BORDERIZE/main/borderize -o /usr/local/bin/borderize
+    sudo chmod +x /usr/local/bin/borderize
+fi
+
+# Borderize wrappers
+box()      { echo -e "$1" | borderize -${2:-$C_MAIN}; }
+box_ok()   { echo -e "$1" | borderize -$C_COMPLETED -$C_WHITE; }
+box_err()  { echo -e "$1" | borderize -$C_FAILED -$C_WHITE; }
+box_warn() { echo -e "$1" | borderize -$C_ORANGE -$C_YELLOW; }
+box_info() { echo -e "$1" | borderize -$C_MAIN -$C_WHITE; }
+
+# Progress display function
+show_progress() {
+    local SOURCE="$1"
+    local TOTAL="$2"
+    local SAVE_DIR="$3"
+    local IS_SINGLE="$4"
+    
+    tput civis
+    clear
+    
+    while [[ -f "$PROGRESS_FILE.running" ]]; do
+        tput cup 0 0
+        
+        CURRENT=$(cat "$TMPDIR/current_num.txt" 2>/dev/null || echo "0")
+        CURRENT_URL=$(cat "$TMPDIR/current_url.txt" 2>/dev/null || echo "")
+        PROGRESS=$(tail -1 "$PROGRESS_FILE" 2>/dev/null || echo "Starting...")
+        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
+        FAILED=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
+        
+        if [[ "$IS_SINGLE" == "1" ]]; then
+            SOURCE_DISP="URL"
+        else
+            [[ ${#SOURCE} -gt 40 ]] && SOURCE_DISP="${SOURCE:0:37}..." || SOURCE_DISP="$SOURCE"
+        fi
+        
+        [[ ${#CURRENT_URL} -gt 70 ]] && CURRENT_URL="${CURRENT_URL:0:67}..."
+        [[ ${#SAVE_DIR} -gt 62 ]] && SAVE_DISP="${SAVE_DIR:0:59}..." || SAVE_DISP="$SAVE_DIR"
+        
+        PROGRESS_CLEAN=$(echo "$PROGRESS" | sed 's/\[download\]/[Progress]/' | head -c 70)
+        
+        LINE1=$(printf "$ICON_FOLDER Saving to: %-62s" "$SAVE_DISP")
+        LINE2=$(printf "$ICON_DOWNLOAD Downloading: %s/%s from: %-41s" "$CURRENT" "$TOTAL" "$SOURCE_DISP")
+        LINE3=$(printf "$ICON_INTERNET %-71s" "$CURRENT_URL")
+        LINE4=$(printf "$ICON_TRAFFIC %-71s" "$PROGRESS_CLEAN")
+        
+        TITLE_BOX=$(echo "VDL - Download Progress" | borderize -$C_TITLE -$C_WHITE)
+        COMP_BOX=$(echo "✓ Completed: $COMPLETED" | borderize -$C_COMPLETED)
+        FAIL_BOX=$(echo "✗ Failed: $FAILED" | borderize -$C_FAILED)
+        VID_BOX=$(echo "$ICON_VIDEO Video: $CURRENT/$TOTAL" | borderize -$C_VIDEO)
+        paste <(echo "$TITLE_BOX") <(echo "$COMP_BOX") <(echo "$FAIL_BOX") <(echo "$VID_BOX") | tr '\t' ' '
+        
+        echo -e "$LINE1\n$LINE2\n$LINE3\n$LINE4" | borderize -$C_MAIN
+        
+        tput el
+        tput el
+        
+        sleep 0.3
+    done
+    
+    tput cnorm
+}
+
+# Cleanup
+cleanup() {
+    tput cnorm
+}
+trap cleanup EXIT
+
+# Screen 1: Header
+clear
+box "VDL - Any Video Downloader" $C_TITLE
+echo ""
+read -p "URL or path to URL list: " INPUT
+[[ -z "$INPUT" ]] && { clear; box_err "No input"; exit 1; }
+
+# Check if it's a file (batch mode)
+if [[ -f "$INPUT" ]]; then
+    IS_SINGLE=0
+    SOURCE_NAME=$(realpath "$INPUT")
+    
+    # Screen 2: Batch info
+    clear
+    box_info "Batch mode: $(grep -cE '^https?://' "$INPUT") URLs"
+    echo ""
+    read -p "Directory [.]: " DIR
+    DIR="${DIR:-.}"
+    DIR="${DIR/#\~/$HOME}"
+    mkdir -p "$DIR"
+    DIR=$(realpath "$DIR")
+    URL_COUNT=$(grep -cE '^https?://' "$INPUT")
+    
+    # Screen 3: Quality
+    clear
+    echo -e "1) Best quality\n2) Audio only (mp3)\n3) 1080p\n4) 720p\n5) Custom" | borderize -$C_VIDEO
+    echo ""
+    read -p "Quality [1]: " Q
+    
+    case "${Q:-1}" in
+        1) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
+        2) FMT="-x --audio-format mp3 --audio-quality 0" ;;
+        3) FMT="-f bestvideo[height<=1080]+bestaudio/best[height<=1080] --merge-output-format mp4" ;;
+        4) FMT="-f bestvideo[height<=720]+bestaudio/best[height<=720] --merge-output-format mp4" ;;
+        5) read -p "Format: " FC; FMT="-f $FC" ;;
+        *) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
+    esac
+    
+    # Screen 4: Background option
+    clear
+    echo "Run in background? [y/N]:" | borderize -$C_VIDEO
+    read -p "" BG_OPT
+    
+    # Initialize progress tracking
+    echo "0" > "$TMPDIR/completed.txt"
+    echo "0" > "$TMPDIR/failed.txt"
+    echo "1" > "$TMPDIR/current_num.txt"
+    echo "" > "$TMPDIR/current_url.txt"
+    echo "Initializing..." > "$PROGRESS_FILE"
+    echo "$URL_COUNT" > "$TMPDIR/total.txt"
+    echo "$DIR" > "$TMPDIR/save_dir.txt"
+    echo "$SOURCE_NAME" > "$TMPDIR/source.txt"
+    > "$TMPDIR/failed_urls.txt"
+    touch "$PROGRESS_FILE.running"
+    
+    if [[ "${BG_OPT,,}" == "y" ]]; then
+        # Start worker in background
+        nohup "$0" --worker "$INPUT" "$DIR" "$FMT" "" "0" > "$TMPDIR/worker.log" 2>&1 &
+        WORKER_PID=$!
+        disown $WORKER_PID
+        echo "$WORKER_PID" > "$PID_FILE"
+        
+        clear
+        echo -e "VDL job started in background - PID: $WORKER_PID\nTo view progress run: VDL --monitor\nTo kill the job run: VDL --stop\nTo list options run: VDL --help" | borderize -$C_COMPLETED
+        exit 0
+    else
+        # Start worker in background
+        "$0" --worker "$INPUT" "$DIR" "$FMT" "" "0" &
+        WORKER_PID=$!
+        
+        # Show progress
+        show_progress "$SOURCE_NAME" "$URL_COUNT" "$DIR" "$IS_SINGLE"
+        
+        wait $WORKER_PID 2>/dev/null
+        
+        # Final summary
+        clear
+        box "BATCH COMPLETE" $C_TITLE
+        echo ""
+        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
+        FAILED_COUNT=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
+        
+        box_ok "✓ Completed: $COMPLETED"
+        echo ""
+        box_err "✗ Failed: $FAILED_COUNT"
+        
+        if [[ -s "$TMPDIR/failed_urls.txt" ]]; then
+            echo ""
+            FAIL_LIST=$(head -10 "$TMPDIR/failed_urls.txt" | while read url; do
+                [[ ${#url} -gt 60 ]] && url="${url:0:57}..."
+                echo "• $url"
+            done)
+            echo -e "Failed URLs:\n$FAIL_LIST" | borderize -$C_FAILED
+            
+            cp "$TMPDIR/failed_urls.txt" "$DIR/failed_urls.txt"
+            echo ""
+            box_warn "Failed list saved: $DIR/failed_urls.txt"
+        fi
+    fi
+
+else
+    # ============ SINGLE URL MODE ============
+    IS_SINGLE=1
+    URL="$INPUT"
+    
+    clear
+    box "Single URL Mode" $C_MAIN
+    echo ""
+    read -p "Directory [.]: " DIR
+    DIR="${DIR:-.}"
+    DIR="${DIR/#\~/$HOME}"
+    mkdir -p "$DIR"
+    DIR=$(realpath "$DIR")
+    
+    clear
+    box_info "URL: ${URL:0:50}..."
+    echo ""
+    read -p "Filename [default]: " NAME
+    
+    clear
+    read -p "List formats? [y/N]: " LIST
+    if [[ "${LIST,,}" == "y" ]]; then
+        yt-dlp -F "$URL" 2>/dev/null | head -30
+        echo ""
+        read -p "Press enter to continue..."
+    fi
+    
+    clear
+    echo -e "1) Best quality\n2) Audio only (mp3)\n3) 1080p\n4) 720p\n5) Custom" | borderize -$C_VIDEO
+    echo ""
+    read -p "Quality [1]: " Q
+    
+    case "${Q:-1}" in
+        1) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
+        2) FMT="-x --audio-format mp3 --audio-quality 0" ;;
+        3) FMT="-f bestvideo[height<=1080]+bestaudio/best[height<=1080] --merge-output-format mp4" ;;
+        4) FMT="-f bestvideo[height<=720]+bestaudio/best[height<=720] --merge-output-format mp4" ;;
+        5) read -p "Format: " FC; FMT="-f $FC" ;;
+        *) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
+    esac
+    
+    # Background option
+    clear
+    echo "Run in background? [y/N]:" | borderize -$C_VIDEO
+    read -p "" BG_OPT
+    
+    # Initialize progress tracking
+    echo "0" > "$TMPDIR/completed.txt"
+    echo "0" > "$TMPDIR/failed.txt"
+    echo "1" > "$TMPDIR/current_num.txt"
+    echo "$URL" > "$TMPDIR/current_url.txt"
+    echo "Initializing..." > "$PROGRESS_FILE"
+    echo "1" > "$TMPDIR/total.txt"
+    echo "$DIR" > "$TMPDIR/save_dir.txt"
+    echo "URL" > "$TMPDIR/source.txt"
+    touch "$PROGRESS_FILE.running"
+    
+    if [[ "${BG_OPT,,}" == "y" ]]; then
+        # Start worker in background
+        nohup "$0" --worker "$URL" "$DIR" "$FMT" "$NAME" "1" > "$TMPDIR/worker.log" 2>&1 &
+        WORKER_PID=$!
+        disown $WORKER_PID
+        echo "$WORKER_PID" > "$PID_FILE"
+        
+        clear
+        echo -e "VDL job started in background - PID: $WORKER_PID\nTo view progress run: VDL --monitor\nTo kill the job run: VDL --stop\nTo list options run: VDL --help" | borderize -$C_COMPLETED
+        exit 0
+    else
+        # Start worker in background
+        "$0" --worker "$URL" "$DIR" "$FMT" "$NAME" "1" &
+        WORKER_PID=$!
+        
+        # Show progress
+        show_progress "$URL" "1" "$DIR" "$IS_SINGLE"
+        
+        wait $WORKER_PID 2>/dev/null
+        
+        # Final result
+        clear
+        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
+        if [[ "$COMPLETED" == "1" ]]; then
+            box_ok "✓ Download complete!"
+        else
+            box_err "✗ Download failed"
+        fi
+    fi
+fi
