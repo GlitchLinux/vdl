@@ -1,6 +1,7 @@
 #!/bin/bash
 
 cd /tmp
+sudo rm /usr/local/bin/VDL
 wget https://raw.githubusercontent.com/GlitchLinux/vdl/refs/heads/main/VDL
 sudo cat VDL > /usr/local/bin/VDL
 sudo chmod +x /usr/local/bin/VDL
