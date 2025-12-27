@@ -93,7 +93,7 @@ if [[ "$1" == "--monitor" || "$1" == "-m" ]]; then
         
         echo -e "$LINE1\n$LINE2\n$LINE3\n$LINE4" | borderize -$C_MAIN
         
-        echo -e "VDL download job is running in the background with Process ID: $WORKER_PID\nCtrl+C will close this monitor. Run: \"VDL -m\" to re-open VDL progress view" | borderize -$C_HINT
+        echo -e "VDL download job is now running in the background with Process ID -> $WORKER_PID\n'Ctrl+C' will close this view. Run: 'VDL --monitor' to open the VDL progress" | borderize -$C_HINT
         
         tput el
         tput el
