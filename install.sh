@@ -4,9 +4,10 @@ cd /tmp
 sudo rm -f VDL
 sudo rm -f /usr/local/bin/VDL
 wget https://raw.githubusercontent.com/GlitchLinux/vdl/refs/heads/main/VDL
-sudo cat VDL > /usr/local/bin/VDL
+sudo cat /tmp/VDL > /usr/local/bin/VDL
 sudo chmod +x /usr/local/bin/VDL
 sudo chmod 777 /usr/local/bin/VDL
+sudo rm -f /tmp/VDL
 
 # Auto-install yt-dlp from GitHub (latest version)
 if ! command -v yt-dlp &>/dev/null; then
@@ -27,5 +28,4 @@ echo "VDL utility have been successfully installed!" > /tmp/vdl-installed
 echo "Start job with: 'VDL' for help run: 'VDL -h'" >> /tmp/vdl-installed
 clear
 cat /tmp/vdl-installed | borderize -FF00FF && rm /tmp/vdl-installed
-sleep 6
-bash /usr/local/bin/VDL
+sleep 5
