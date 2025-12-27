@@ -351,3 +351,4 @@ else
     # Auto-launch monitor
     exec "$0" --monitor
 fi
+
