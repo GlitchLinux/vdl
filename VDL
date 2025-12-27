@@ -57,6 +57,8 @@ if [[ "$1" == "--monitor" || "$1" == "-m" ]]; then
         exit 1
     fi
     
+    WORKER_PID=$(cat "$PID_FILE" 2>/dev/null || echo "???")
+    
     tput civis
     clear
     
@@ -91,7 +93,7 @@ if [[ "$1" == "--monitor" || "$1" == "-m" ]]; then
         
         echo -e "$LINE1\n$LINE2\n$LINE3\n$LINE4" | borderize -$C_MAIN
         
-        echo "Press Ctrl+C to close monitor (download continues in background)" | borderize -$C_HINT
+        echo -e "VDL download job is running in the background with Process ID: $WORKER_PID\nCtrl+C will close this monitor. Run: \"VDL -m\" to re-open VDL progress view" | borderize -$C_HINT
         
         tput el
         tput el
@@ -223,58 +225,6 @@ box_err()  { echo -e "$1" | borderize -$C_FAILED -$C_WHITE; }
 box_warn() { echo -e "$1" | borderize -$C_ORANGE -$C_YELLOW; }
 box_info() { echo -e "$1" | borderize -$C_MAIN -$C_WHITE; }
 
-# Progress display function
-show_progress() {
-    local SOURCE="$1"
-    local TOTAL="$2"
-    local SAVE_DIR="$3"
-    local IS_SINGLE="$4"
-    
-    tput civis
-    clear
-    
-    while [[ -f "$PROGRESS_FILE.running" ]]; do
-        tput cup 0 0
-        
-        CURRENT=$(cat "$TMPDIR/current_num.txt" 2>/dev/null || echo "0")
-        CURRENT_URL=$(cat "$TMPDIR/current_url.txt" 2>/dev/null || echo "")
-        PROGRESS=$(tail -1 "$PROGRESS_FILE" 2>/dev/null || echo "Starting...")
-        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
-        FAILED=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
-        
-        if [[ "$IS_SINGLE" == "1" ]]; then
-            SOURCE_DISP="URL"
-        else
-            [[ ${#SOURCE} -gt 40 ]] && SOURCE_DISP="${SOURCE:0:37}..." || SOURCE_DISP="$SOURCE"
-        fi
-        
-        [[ ${#CURRENT_URL} -gt 70 ]] && CURRENT_URL="${CURRENT_URL:0:67}..."
-        [[ ${#SAVE_DIR} -gt 62 ]] && SAVE_DISP="${SAVE_DIR:0:59}..." || SAVE_DISP="$SAVE_DIR"
-        
-        PROGRESS_CLEAN=$(echo "$PROGRESS" | sed 's/\[download\]/[Progress]/' | head -c 70)
-        
-        LINE1=$(printf "$ICON_FOLDER Saving to: %-62s" "$SAVE_DISP")
-        LINE2=$(printf "$ICON_DOWNLOAD Downloading: %s/%s from: %-41s" "$CURRENT" "$TOTAL" "$SOURCE_DISP")
-        LINE3=$(printf "$ICON_INTERNET %-71s" "$CURRENT_URL")
-        LINE4=$(printf "$ICON_TRAFFIC %-71s" "$PROGRESS_CLEAN")
-        
-        TITLE_BOX=$(echo "VDL - Download Progress" | borderize -$C_TITLE -$C_WHITE)
-        COMP_BOX=$(echo "✓ Completed: $COMPLETED" | borderize -$C_COMPLETED)
-        FAIL_BOX=$(echo "✗ Failed: $FAILED" | borderize -$C_FAILED)
-        VID_BOX=$(echo "$ICON_VIDEO Video: $CURRENT/$TOTAL" | borderize -$C_VIDEO)
-        paste <(echo "$TITLE_BOX") <(echo "$COMP_BOX") <(echo "$FAIL_BOX") <(echo "$VID_BOX") | tr '\t' ' '
-        
-        echo -e "$LINE1\n$LINE2\n$LINE3\n$LINE4" | borderize -$C_MAIN
-        
-        tput el
-        tput el
-        
-        sleep 0.3
-    done
-    
-    tput cnorm
-}
-
 # Cleanup
 cleanup() {
     tput cnorm
@@ -295,14 +245,14 @@ if [[ -f "$INPUT" ]]; then
     
     # Screen 2: Batch info
     clear
-    box_info "Batch mode: $(grep -cE '^https?://' "$INPUT") URLs"
+    URL_COUNT=$(grep -cE '^https?://' "$INPUT")
+    box_info "Batch mode: $URL_COUNT URLs"
     echo ""
     read -p "Directory [.]: " DIR
     DIR="${DIR:-.}"
     DIR="${DIR/#\~/$HOME}"
     mkdir -p "$DIR"
     DIR=$(realpath "$DIR")
-    URL_COUNT=$(grep -cE '^https?://' "$INPUT")
     
     # Screen 3: Quality
     clear
@@ -319,11 +269,6 @@ if [[ -f "$INPUT" ]]; then
         *) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
     esac
     
-    # Screen 4: Background option
-    clear
-    echo "Run in background? [y/N]:" | borderize -$C_VIDEO
-    read -p "" BG_OPT
-    
     # Initialize progress tracking
     echo "0" > "$TMPDIR/completed.txt"
     echo "0" > "$TMPDIR/failed.txt"
@@ -336,50 +281,14 @@ if [[ -f "$INPUT" ]]; then
     > "$TMPDIR/failed_urls.txt"
     touch "$PROGRESS_FILE.running"
     
-    if [[ "${BG_OPT,,}" == "y" ]]; then
-        # Start worker in background
-        nohup "$0" --worker "$INPUT" "$DIR" "$FMT" "" "0" > "$TMPDIR/worker.log" 2>&1 &
-        WORKER_PID=$!
-        disown $WORKER_PID
-        echo "$WORKER_PID" > "$PID_FILE"
-        
-        clear
-        echo -e "VDL job started in background - PID: $WORKER_PID\nTo view progress run: VDL --monitor\nTo kill the job run: VDL --stop\nTo list options run: VDL --help" | borderize -$C_COMPLETED
-        exit 0
-    else
-        # Start worker in background
-        "$0" --worker "$INPUT" "$DIR" "$FMT" "" "0" &
-        WORKER_PID=$!
-        
-        # Show progress
-        show_progress "$SOURCE_NAME" "$URL_COUNT" "$DIR" "$IS_SINGLE"
-        
-        wait $WORKER_PID 2>/dev/null
-        
-        # Final summary
-        clear
-        box "BATCH COMPLETE" $C_TITLE
-        echo ""
-        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
-        FAILED_COUNT=$(cat "$TMPDIR/failed.txt" 2>/dev/null || echo "0")
-        
-        box_ok "✓ Completed: $COMPLETED"
-        echo ""
-        box_err "✗ Failed: $FAILED_COUNT"
-        
-        if [[ -s "$TMPDIR/failed_urls.txt" ]]; then
-            echo ""
-            FAIL_LIST=$(head -10 "$TMPDIR/failed_urls.txt" | while read url; do
-                [[ ${#url} -gt 60 ]] && url="${url:0:57}..."
-                echo "• $url"
-            done)
-            echo -e "Failed URLs:\n$FAIL_LIST" | borderize -$C_FAILED
-            
-            cp "$TMPDIR/failed_urls.txt" "$DIR/failed_urls.txt"
-            echo ""
-            box_warn "Failed list saved: $DIR/failed_urls.txt"
-        fi
-    fi
+    # Start worker in background
+    nohup "$0" --worker "$INPUT" "$DIR" "$FMT" "" "0" > "$TMPDIR/worker.log" 2>&1 &
+    WORKER_PID=$!
+    disown $WORKER_PID
+    echo "$WORKER_PID" > "$PID_FILE"
+    
+    # Auto-launch monitor
+    exec "$0" --monitor
 
 else
     # ============ SINGLE URL MODE ============
@@ -422,11 +331,6 @@ else
         *) FMT="-f bestvideo+bestaudio/best --merge-output-format mp4" ;;
     esac
     
-    # Background option
-    clear
-    echo "Run in background? [y/N]:" | borderize -$C_VIDEO
-    read -p "" BG_OPT
-    
     # Initialize progress tracking
     echo "0" > "$TMPDIR/completed.txt"
     echo "0" > "$TMPDIR/failed.txt"
@@ -438,33 +342,12 @@ else
     echo "URL" > "$TMPDIR/source.txt"
     touch "$PROGRESS_FILE.running"
     
-    if [[ "${BG_OPT,,}" == "y" ]]; then
-        # Start worker in background
-        nohup "$0" --worker "$URL" "$DIR" "$FMT" "$NAME" "1" > "$TMPDIR/worker.log" 2>&1 &
-        WORKER_PID=$!
-        disown $WORKER_PID
-        echo "$WORKER_PID" > "$PID_FILE"
-        
-        clear
-        echo -e "VDL job started in background - PID: $WORKER_PID\nTo view progress run: VDL --monitor\nTo kill the job run: VDL --stop\nTo list options run: VDL --help" | borderize -$C_COMPLETED
-        exit 0
-    else
-        # Start worker in background
-        "$0" --worker "$URL" "$DIR" "$FMT" "$NAME" "1" &
-        WORKER_PID=$!
-        
-        # Show progress
-        show_progress "$URL" "1" "$DIR" "$IS_SINGLE"
-        
-        wait $WORKER_PID 2>/dev/null
-        
-        # Final result
-        clear
-        COMPLETED=$(cat "$TMPDIR/completed.txt" 2>/dev/null || echo "0")
-        if [[ "$COMPLETED" == "1" ]]; then
-            box_ok "✓ Download complete!"
-        else
-            box_err "✗ Download failed"
-        fi
-    fi
+    # Start worker in background
+    nohup "$0" --worker "$URL" "$DIR" "$FMT" "$NAME" "1" > "$TMPDIR/worker.log" 2>&1 &
+    WORKER_PID=$!
+    disown $WORKER_PID
+    echo "$WORKER_PID" > "$PID_FILE"
+    
+    # Auto-launch monitor
+    exec "$0" --monitor
 fi
