@@ -23,4 +23,6 @@ fi
 
 echo "VDL - Any Video Downloader have been successfully installed" > /tmp/vdl-installed
 echo "Start job with 'VDL' or run 'VDL --help'" >> /tmp/vdl-installed
-cat /tmp/vdl-installed | borderize -FF00FF -00FFFF && rm /tmp/vdl-installed
+clear
+cat /tmp/vdl-installed | borderize -FF00FF && rm /tmp/vdl-installed
+echo ""
