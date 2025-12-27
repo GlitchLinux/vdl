@@ -22,8 +22,6 @@ if ! command -v borderize &>/dev/null; then
 fi
 
 echo "VDL utility have been successfully installed!" > /tmp/vdl-installed
-echo ">tart download job run: 'VDL' help: 'VDL --help'" >> /tmp/vdl-installed
+echo "Start job with: 'VDL' for help run: 'VDL -h'" >> /tmp/vdl-installed
 clear
-echo ""
 cat /tmp/vdl-installed | borderize -FF00FF && rm /tmp/vdl-installed
-echo ""
