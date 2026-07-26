@@ -18,11 +18,21 @@ C_ORANGE="FFA500"
 C_HINT="888888"
 
 # Nerdfont icons
-ICON_VIDEO=""       # f1c8
-ICON_DOWNLOAD=" "   # f0ab
-ICON_FOLDER=" "     # f114
-ICON_INTERNET=" "   # f0ac
-ICON_TRAFFIC=" "    # f1c1
+ICON_VIDEO=""       # f1c8
+ICON_DOWNLOAD=" "   # f0ab
+ICON_FOLDER=" "     # f114
+ICON_INTERNET=" "   # f0ac
+ICON_TRAFFIC=" "    # f1c1
+
+# Extract a clean URL from a raw line: strip CR, leading/trailing whitespace,
+# skip blank lines and comments, then pull out the first http(s):// token.
+extract_url() {
+    local raw="$1"
+    raw="${raw%$'\r'}"
+    raw="$(echo "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ -z "$raw" || "$raw" =~ ^# ]] && return 1
+    echo "$raw" | grep -oE 'https?://[^[:space:]]+' | head -1
+}
 
 # ============ HELP ============
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
@@ -157,15 +167,15 @@ if [[ "$1" == "--worker" ]]; then
     }
     
     if [[ -f "$INPUT" ]]; then
-        # Batch mode
+        # Batch mode - accepts any text file with one URL per line
+        # (blank lines, whitespace, comment lines starting with #, and
+        # CRLF line endings are all tolerated)
         CURRENT=0
         COMPLETED=0
         FAILED_COUNT=0
         
         while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" || "$line" =~ ^# ]] && continue
-            
-            URL=$(echo "$line" | grep -oE 'https?://[^\s]+' | head -1)
+            URL="$(extract_url "$line")"
             [[ -z "$URL" ]] && continue
             
             ((CURRENT++))
@@ -237,6 +247,7 @@ box "VDL - Any Video Downloader" $C_TITLE
 echo ""
 read -p "URL or path to URL list: " INPUT
 [[ -z "$INPUT" ]] && { clear; box_err "No input"; exit 1; }
+INPUT="${INPUT/#\~/$HOME}"
 
 # Check if it's a file (batch mode)
 if [[ -f "$INPUT" ]]; then
@@ -245,8 +256,14 @@ if [[ -f "$INPUT" ]]; then
     
     # Screen 2: Batch info
     clear
-    URL_COUNT=$(grep -cE '^https?://' "$INPUT")
-    box_info "Batch mode: $URL_COUNT URLs"
+    URL_COUNT=$(grep -cE 'https?://' "$INPUT")
+    
+    if [[ "$URL_COUNT" -eq 0 ]]; then
+        box_err "No URLs found in $SOURCE_NAME"
+        exit 1
+    fi
+    
+    box_info "Batch mode: $URL_COUNT URLs found in $(basename "$INPUT")"
     echo ""
     read -p "Directory [.]: " DIR
     DIR="${DIR:-.}"
