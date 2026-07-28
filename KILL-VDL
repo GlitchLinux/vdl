@@ -1,0 +1,4 @@
+#!/bin/bash
+sudo pkill VDL
+sudo pkill python3
+sudo pkill yt-dlp
