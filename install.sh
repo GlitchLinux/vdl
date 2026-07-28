@@ -1,13 +1,17 @@
 #!/bin/bash
 
 cd /tmp
-sudo rm -f VDL
-sudo rm -f /usr/local/bin/VDL
+sudo rm -f VDL URL-SCRAPE KILL-VDL
+sudo rm -f /bin/VDL /bin/URL-SCRAPE /bin/KILL-VDL
 wget https://raw.githubusercontent.com/GlitchLinux/vdl/refs/heads/main/VDL
-sudo cat /tmp/VDL > /usr/local/bin/VDL
-sudo chmod +x /usr/local/bin/VDL
-sudo chmod 777 /usr/local/bin/VDL
-sudo rm -f /tmp/VDL
+wget https://raw.githubusercontent.com/GlitchLinux/vdl/refs/heads/main/URL-SCRAPE
+wget https://raw.githubusercontent.com/GlitchLinux/vdl/refs/heads/main/KILL-VDL
+sudo mv VDL /bin/VDL
+sudo mv URL-SCRAPE /bin/URL-SCRAPE 
+sudo mv KILL-VDL /bin/KILL-VDL
+sudo chmod +x /bin/VDL
+sudo chmod +x /bin/URL-SCRAPE
+sudo chmod +x /bin/KILL-VDL
 
 # Auto-install yt-dlp from GitHub (latest version)
 if ! command -v yt-dlp &>/dev/null; then
